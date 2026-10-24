@@ -1,0 +1,14 @@
+flowchart LR
+    U[Users] -->|HTTPS| W[Azure App Service<br/>Linux · 2+ workers]
+    W -->|/health every minute| HC[App Service Health Check]
+    HC -->|Unhealthy worker<br/>remove from routing| W
+    W -->|Repeated HTTP 5xx| AH[App Service Auto-Heal]
+    AH -->|Recycle app process| W
+    W -->|Traces and logs| AI[Application Insights]
+    AI --> LAW[Log Analytics workspace]
+    W -->|Http5xx metric| AM[Azure Monitor metric alert]
+    AM --> AG[Action Group<br/>optional email]
+    GH[GitHub Actions] -->|OIDC short-lived identity| ENTRA[Microsoft Entra ID]
+    ENTRA -->|Scoped RBAC| W
+    TF[Terraform] -->|Provisions| W
+    TF -->|Remote state in Azure Blob| STATE[Private Storage Container]

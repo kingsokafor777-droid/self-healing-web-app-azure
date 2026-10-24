@@ -1,0 +1,75 @@
+name: Terraform
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_apply:
+        description: "Set true only when you intend to create or modify billable Azure resources"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: terraform-production
+  cancel-in-progress: false
+
+jobs:
+  plan-and-apply:
+    name: Terraform plan and optional apply
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: infra
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - name: Validate required GitHub variables
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID TF_STATE_RESOURCE_GROUP TF_STATE_STORAGE_ACCOUNT TF_STATE_CONTAINER TF_STATE_KEY; do
+            if [[ -z "${!name:-}" ]]; then echo "Missing repository/environment variable: $name" >&2; exit 1; fi
+          done
+        env:
+          TF_STATE_RESOURCE_GROUP: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+          TF_STATE_STORAGE_ACCOUNT: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+          TF_STATE_CONTAINER: ${{ vars.TF_STATE_CONTAINER }}
+          TF_STATE_KEY: ${{ vars.TF_STATE_KEY }}
+      - name: Sign in to Azure with GitHub OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Initialize Terraform backend
+        run: >-
+          terraform init -input=false
+          -backend-config="resource_group_name=${{ vars.TF_STATE_RESOURCE_GROUP }}"
+          -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}"
+          -backend-config="container_name=${{ vars.TF_STATE_CONTAINER }}"
+          -backend-config="key=${{ vars.TF_STATE_KEY }}"
+          -backend-config="use_oidc=true"
+          -backend-config="use_azuread_auth=true"
+          -backend-config="client_id=${{ vars.AZURE_CLIENT_ID }}"
+          -backend-config="tenant_id=${{ vars.AZURE_TENANT_ID }}"
+          -backend-config="subscription_id=${{ vars.AZURE_SUBSCRIPTION_ID }}"
+      - name: Terraform validate
+        run: terraform validate
+      - name: Terraform plan
+        run: terraform plan -input=false -out=tfplan
+      - name: Terraform apply (only when explicitly requested)
+        if: ${{ inputs.confirm_apply }}
+        run: terraform apply -input=false -auto-approve tfplan

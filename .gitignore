@@ -1,0 +1,20 @@
+# Terraform working files and state
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+*.tfplan
+crash.log
+crash.*.log
+infra/backend.hcl
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+app/.python_packages/
+
+# Build outputs
+app.zip
