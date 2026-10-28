@@ -1,6 +1,6 @@
 output "resource_group_name" {
-  description = "Resource group containing the application and monitoring resources."
-  value       = azurerm_resource_group.main.name
+  description = "Existing application resource group containing the Terraform-managed resources."
+  value       = data.azurerm_resource_group.main.name
 }
 
 output "web_app_name" {

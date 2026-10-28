@@ -40,6 +40,20 @@ class HealthEndpointTests(unittest.TestCase):
             response = self.client.get("/health")
         self.assertEqual(response.status_code, 200)
 
+    def test_liveness_stays_healthy_when_readiness_fails(self):
+        settings = {
+            "ENABLE_FAILURE_SIMULATION": "true",
+            "SIMULATE_UNHEALTHY_INSTANCE_ID": "worker-a",
+            "WEBSITE_INSTANCE_ID": "worker-a",
+        }
+        with patch.dict(os.environ, settings, clear=True):
+            health_response = self.client.get("/health")
+            live_response = self.client.get("/live")
+            ready_response = self.client.get("/ready")
+        self.assertEqual(health_response.status_code, 503)
+        self.assertEqual(live_response.status_code, 200)
+        self.assertEqual(ready_response.status_code, 503)
+
     def test_failure_diagnostics_are_hidden_by_default(self):
         with patch.dict(os.environ, {"ENABLE_FAILURE_SIMULATION": "false"}, clear=True):
             response = self.client.get("/demo/instance")
@@ -61,6 +75,17 @@ class HealthEndpointTests(unittest.TestCase):
         with patch.dict(os.environ, settings, clear=True):
             response = self.client.get("/demo/fail")
         self.assertEqual(response.status_code, 200)
+
+    def test_failure_route_returns_503_on_target_instance(self):
+        settings = {
+            "ENABLE_FAILURE_SIMULATION": "true",
+            "SIMULATE_UNHEALTHY_INSTANCE_ID": "worker-a",
+            "WEBSITE_INSTANCE_ID": "worker-a",
+        }
+        with patch.dict(os.environ, settings, clear=True):
+            response = self.client.get("/demo/fail")
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json["status"], "simulated_failure")
 
 
 if __name__ == "__main__":

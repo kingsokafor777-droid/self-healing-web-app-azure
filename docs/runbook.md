@@ -26,7 +26,7 @@ Only perform in a disposable test subscription or resource group. The exercise t
 2. Query `/demo/instance` repeatedly and record one worker ID. This diagnostics route is available only while the simulation feature is explicitly enabled.
 3. Set Terraform input `failure_target_instance_id` to that exact worker ID and apply. Only requests handled by that worker should return 503 from `/health`; other workers should remain healthy. The target setting is managed by Terraform to avoid configuration drift.
 4. Observe `/health`, instance health, routing behavior, Auto-Heal events, and the alert timeline. Health Check and Auto-Heal have thresholds and platform limits, so recovery is not instantaneous. If Azure replaces a worker and the ID changes, repeat the diagnostics lookup and retarget only in the test environment.
-5. Remove `SIMULATE_UNHEALTHY_INSTANCE_ID`, set the Terraform option back to false, apply, and verify recovery. Disable failure simulation and redeploy the safe build before keeping the environment.
+5. Clear `failure_target_instance_id`, set `enable_failure_simulation = false`, apply, and verify recovery. Terraform removes the target app setting; do not edit it out of band. Keep the feature disabled and redeploy the safe build before retaining the environment.
 
 ## Important limits
 

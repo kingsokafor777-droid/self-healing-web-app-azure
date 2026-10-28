@@ -1,5 +1,5 @@
 terraform {
-  required_version = "~> 1.9"
+  required_version = ">= 1.9.0, < 2.0.0"
 
   required_providers {
     azurerm = {
@@ -16,16 +16,14 @@ provider "azurerm" {
   subscription_id = var.subscription_id
 }
 
-resource "azurerm_resource_group" "main" {
-  name     = "${var.name_prefix}-rg"
-  location = var.location
-  tags     = var.tags
+data "azurerm_resource_group" "main" {
+  name = var.app_resource_group_name
 }
 
 resource "azurerm_log_analytics_workspace" "main" {
   name                = "${var.name_prefix}-logs"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
+  location            = data.azurerm_resource_group.main.location
+  resource_group_name = data.azurerm_resource_group.main.name
   sku                 = "PerGB2018"
   retention_in_days   = var.log_retention_days
   tags                = var.tags
@@ -33,8 +31,8 @@ resource "azurerm_log_analytics_workspace" "main" {
 
 resource "azurerm_application_insights" "main" {
   name                = "${var.name_prefix}-appi"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
+  location            = data.azurerm_resource_group.main.location
+  resource_group_name = data.azurerm_resource_group.main.name
   workspace_id        = azurerm_log_analytics_workspace.main.id
   application_type    = "web"
   retention_in_days   = var.log_retention_days
@@ -43,8 +41,8 @@ resource "azurerm_application_insights" "main" {
 
 resource "azurerm_service_plan" "main" {
   name                = "${var.name_prefix}-plan"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
+  location            = data.azurerm_resource_group.main.location
+  resource_group_name = data.azurerm_resource_group.main.name
   os_type             = "Linux"
   sku_name            = var.app_service_sku
   worker_count        = var.instance_count
@@ -53,8 +51,8 @@ resource "azurerm_service_plan" "main" {
 
 resource "azurerm_linux_web_app" "main" {
   name                                           = var.web_app_name
-  location                                       = azurerm_resource_group.main.location
-  resource_group_name                            = azurerm_resource_group.main.name
+  location                                       = data.azurerm_resource_group.main.location
+  resource_group_name                            = data.azurerm_resource_group.main.name
   service_plan_id                                = azurerm_service_plan.main.id
   https_only                                     = true
   public_network_access_enabled                  = true
@@ -120,7 +118,7 @@ resource "azurerm_linux_web_app" "main" {
 
 resource "azurerm_monitor_action_group" "operations" {
   name                = "${var.name_prefix}-ops-ag"
-  resource_group_name = azurerm_resource_group.main.name
+  resource_group_name = data.azurerm_resource_group.main.name
   short_name          = "${var.name_prefix}-ops"
   tags                = var.tags
 
@@ -136,7 +134,7 @@ resource "azurerm_monitor_action_group" "operations" {
 
 resource "azurerm_monitor_metric_alert" "http_5xx" {
   name                = "${var.name_prefix}-http-5xx"
-  resource_group_name = azurerm_resource_group.main.name
+  resource_group_name = data.azurerm_resource_group.main.name
   scopes              = [azurerm_linux_web_app.main.id]
   description         = "Sustained HTTP 5xx responses. App Service Health Check and Auto-Heal are the automated mitigations; investigate the incident in Application Insights."
   severity            = 2

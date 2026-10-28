@@ -14,11 +14,13 @@ The default instance count is two, because traffic isolation is not meaningful w
 
 ## OIDC and least privilege
 
-GitHub Actions uses federated identity credentials and short-lived tokens rather than a client secret or publishing profile. The trust must be limited to this repository/environment and RBAC must be scoped to the application resource group and state container wherever possible.
+GitHub Actions uses federated identity credentials and short-lived tokens rather than client secrets or publishing profiles. The Terraform plan identity is separate from the apply identity; the app deploy job uses a third identity with Website Contributor access scoped to the web app. Trust subjects are restricted to the named `terraform-plan` or `production` GitHub environment, and the production environment is intended to require reviewer approval and allow only `main`.
+
+The plan job writes both its human-readable review file and (when apply is requested) its binary saved plan to the private Azure Blob container. Plan contents are not printed in public GitHub logs. A human with Entra storage access inspects the text file before approving the protected production job. The apply job retrieves the exact binary plan, applies it, and deletes the plan blobs after the attempt. A storage lifecycle policy expires leftovers after one day. Terraform rejects the saved plan if remote state changed between planning and apply.
 
 ## Separate state storage
 
-Terraform's state is stored in a private Azure Storage container with blob lease locking. The state backend is separate from the application stack so it can survive `terraform destroy`. State may contain sensitive deployment metadata; access to the container must be restricted.
+The application resource group is created before the workflow runs so OIDC identities can be scoped to an existing group rather than receiving subscription-wide resource creation permissions. Terraform owns the app and monitoring resources inside that group. Terraform's state is stored in a private Azure Storage container with blob lease locking. The backend and application group are separate from the managed resources so they survive `terraform destroy`. State and plans may contain sensitive deployment metadata; restrict both to narrow RBAC access.
 
 ## Alerts do not remediate
 

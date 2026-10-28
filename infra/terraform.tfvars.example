@@ -1,13 +1,13 @@
-# Copy to terraform.tfvars and fill in your own Azure values.
+# Copy to terraform.tfvars and fill in your Azure values.
 # Never commit terraform.tfvars or state files.
-subscription_id = "00000000-0000-0000-0000-000000000000"
-web_app_name    = "replace-with-globally-unique-name"
-location        = "eastus"
-name_prefix     = "healweb"
-app_service_sku = "P1v3"
-instance_count  = 2
-alert_email     = ""
+subscription_id         = "00000000-0000-0000-0000-000000000000"
+app_resource_group_name = "healweb-app-rg"
+web_app_name            = "replace-with-globally-unique-name"
+name_prefix             = "healweb"
+app_service_sku         = "P1v3"
+instance_count          = 2
+alert_email             = ""
 
 # Keep false for any shared or production environment.
-enable_failure_simulation = false
+enable_failure_simulation  = false
 failure_target_instance_id = ""

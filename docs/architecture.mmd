@@ -1,14 +1,39 @@
-flowchart LR
-    U[Users] -->|HTTPS| W[Azure App Service<br/>Linux · 2+ workers]
-    W -->|/health every minute| HC[App Service Health Check]
-    HC -->|Unhealthy worker<br/>remove from routing| W
-    W -->|Repeated HTTP 5xx| AH[App Service Auto-Heal]
-    AH -->|Recycle app process| W
-    W -->|Traces and logs| AI[Application Insights]
-    AI --> LAW[Log Analytics workspace]
-    W -->|Http5xx metric| AM[Azure Monitor metric alert]
-    AM --> AG[Action Group<br/>optional email]
-    GH[GitHub Actions] -->|OIDC short-lived identity| ENTRA[Microsoft Entra ID]
-    ENTRA -->|Scoped RBAC| W
-    TF[Terraform] -->|Provisions| W
-    TF -->|Remote state in Azure Blob| STATE[Private Storage Container]
+flowchart TB
+    GH[GitHub Actions<br/>main only]
+    PI[Plan identity<br/>Reader + state access]
+    AI[Apply identity<br/>Contributor + state access]
+    DI[Deploy identity<br/>Website Contributor]
+    GH -->|OIDC| PI
+    GH -->|OIDC · protected| AI
+    GH -->|OIDC · protected| DI
+
+    PI --> PLAN[Terraform plan]
+    PLAN -->|Private plan files<br/>Azure Blob · plans/| BLOB[(Private state container)]
+    BLOB -->|Reviewer reads privately| REVIEW[Production approval]
+    REVIEW --> APPLY[Apply exact saved plan]
+    AI --> APPLY
+    DI --> DEPLOY[Deploy source ZIP<br/>Oryx installs requirements]
+
+    subgraph APP[Application resource group]
+        direction TB
+        W[Azure App Service<br/>Linux · 2+ workers]
+        HEALTH[Health Check<br/>traffic isolation]
+        HEAL[Auto-Heal<br/>process recycle]
+        INSIGHTS[Application Insights]
+        LOGS[Log Analytics]
+        ALERT[Azure Monitor<br/>HTTP 5xx alert]
+        GROUP[Action Group<br/>optional email]
+        USERS[Users]
+        USERS -->|HTTPS| W
+        W -->|/health| HEALTH
+        HEALTH -->|Remove unhealthy worker<br/>from routing| W
+        W -->|Repeated HTTP 5xx| HEAL
+        HEAL -->|Recycle process| W
+        W -->|Traces and logs| INSIGHTS
+        INSIGHTS --> LOGS
+        W -->|Http5xx metric| ALERT
+        ALERT --> GROUP
+    end
+
+    APPLY -->|Provision resources| W
+    DEPLOY --> W

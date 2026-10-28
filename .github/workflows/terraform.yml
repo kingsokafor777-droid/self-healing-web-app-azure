@@ -1,25 +1,113 @@
 name: Terraform
-
 on:
   workflow_dispatch:
     inputs:
       confirm_apply:
-        description: "Set true only when you intend to create or modify billable Azure resources"
+        description: "Set true to request apply after privately reviewing the plan and approving the protected production environment"
         required: true
         type: boolean
         default: false
-
 permissions:
   contents: read
   id-token: write
-
 concurrency:
   group: terraform-production
   cancel-in-progress: false
-
 jobs:
-  plan-and-apply:
-    name: Terraform plan and optional apply
+  plan:
+    name: Terraform plan
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: terraform-plan
+    defaults:
+      run:
+        working-directory: infra
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_SKIP_PROVIDER_REGISTRATION: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_PLAN_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_app_resource_group_name: ${{ vars.APP_RESOURCE_GROUP }}
+      TF_STATE_RESOURCE_GROUP: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+      TF_STATE_STORAGE_ACCOUNT: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+      TF_STATE_CONTAINER: ${{ vars.TF_STATE_CONTAINER }}
+      TF_STATE_KEY: ${{ vars.TF_STATE_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.17.0
+      - name: Validate required GitHub variables
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in ARM_CLIENT_ID ARM_TENANT_ID ARM_SUBSCRIPTION_ID TF_VAR_app_resource_group_name TF_STATE_RESOURCE_GROUP TF_STATE_STORAGE_ACCOUNT TF_STATE_CONTAINER TF_STATE_KEY; do
+            if [[ -z "${!name:-}" ]]; then echo "Missing repository variable: $name" >&2; exit 1; fi
+          done
+      - name: Sign in with the plan-only Azure identity
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_PLAN_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Initialize Terraform backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform init -input=false \
+            -backend-config="resource_group_name=${TF_STATE_RESOURCE_GROUP}" \
+            -backend-config="storage_account_name=${TF_STATE_STORAGE_ACCOUNT}" \
+            -backend-config="container_name=${TF_STATE_CONTAINER}" \
+            -backend-config="key=${TF_STATE_KEY}" \
+            -backend-config="use_oidc=true" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="client_id=${ARM_CLIENT_ID}" \
+            -backend-config="tenant_id=${ARM_TENANT_ID}" \
+            -backend-config="subscription_id=${ARM_SUBSCRIPTION_ID}"
+      - name: Validate Terraform
+        run: terraform validate
+      - name: Create saved Terraform plan
+        run: terraform plan -input=false -out=tfplan
+      - name: Render plan to a private review file
+        run: terraform show -no-color tfplan > plan.txt
+      - name: Store plan details in private Azure Blob storage
+        shell: bash
+        run: |
+          set -euo pipefail
+          plan_text_blob="plans/${GITHUB_RUN_ID}.txt"
+          az storage blob upload \
+            --account-name "$TF_STATE_STORAGE_ACCOUNT" \
+            --container-name "$TF_STATE_CONTAINER" \
+            --name "$plan_text_blob" \
+            --file plan.txt \
+            --auth-mode login \
+            --overwrite true \
+            --only-show-errors \
+            --output none
+          echo "Private plan review file: $plan_text_blob"
+      - name: Store saved plan for the gated apply job
+        if: ${{ inputs.confirm_apply }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          plan_blob="plans/${GITHUB_RUN_ID}.tfplan"
+          az storage blob upload \
+            --account-name "$TF_STATE_STORAGE_ACCOUNT" \
+            --container-name "$TF_STATE_CONTAINER" \
+            --name "$plan_blob" \
+            --file tfplan \
+            --auth-mode login \
+            --overwrite true \
+            --only-show-errors \
+            --output none
+  apply:
+    name: Apply the reviewed Terraform plan
+    if: ${{ github.ref == 'refs/heads/main' && inputs.confirm_apply && needs.plan.result == 'success' }}
+    needs: plan
     runs-on: ubuntu-latest
     environment: production
     defaults:
@@ -27,49 +115,77 @@ jobs:
         working-directory: infra
     env:
       ARM_USE_OIDC: "true"
-      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_SKIP_PROVIDER_REGISTRATION: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_APPLY_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_app_resource_group_name: ${{ vars.APP_RESOURCE_GROUP }}
+      TF_STATE_RESOURCE_GROUP: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+      TF_STATE_STORAGE_ACCOUNT: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+      TF_STATE_CONTAINER: ${{ vars.TF_STATE_CONTAINER }}
+      TF_STATE_KEY: ${{ vars.TF_STATE_KEY }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@v7
         with:
-          terraform_version: 1.9.8
+          ref: ${{ github.sha }}
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.17.0
       - name: Validate required GitHub variables
         shell: bash
         run: |
           set -euo pipefail
-          for name in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID TF_STATE_RESOURCE_GROUP TF_STATE_STORAGE_ACCOUNT TF_STATE_CONTAINER TF_STATE_KEY; do
-            if [[ -z "${!name:-}" ]]; then echo "Missing repository/environment variable: $name" >&2; exit 1; fi
+          for name in ARM_CLIENT_ID ARM_TENANT_ID ARM_SUBSCRIPTION_ID TF_VAR_app_resource_group_name TF_STATE_RESOURCE_GROUP TF_STATE_STORAGE_ACCOUNT TF_STATE_CONTAINER TF_STATE_KEY; do
+            if [[ -z "${!name:-}" ]]; then echo "Missing repository variable: $name" >&2; exit 1; fi
           done
-        env:
-          TF_STATE_RESOURCE_GROUP: ${{ vars.TF_STATE_RESOURCE_GROUP }}
-          TF_STATE_STORAGE_ACCOUNT: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
-          TF_STATE_CONTAINER: ${{ vars.TF_STATE_CONTAINER }}
-          TF_STATE_KEY: ${{ vars.TF_STATE_KEY }}
-      - name: Sign in to Azure with GitHub OIDC
-        uses: azure/login@v2
+      - name: Sign in with the protected apply Azure identity
+        uses: azure/login@v3
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          client-id: ${{ vars.AZURE_APPLY_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Initialize Terraform backend
-        run: >-
-          terraform init -input=false
-          -backend-config="resource_group_name=${{ vars.TF_STATE_RESOURCE_GROUP }}"
-          -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}"
-          -backend-config="container_name=${{ vars.TF_STATE_CONTAINER }}"
-          -backend-config="key=${{ vars.TF_STATE_KEY }}"
-          -backend-config="use_oidc=true"
-          -backend-config="use_azuread_auth=true"
-          -backend-config="client_id=${{ vars.AZURE_CLIENT_ID }}"
-          -backend-config="tenant_id=${{ vars.AZURE_TENANT_ID }}"
-          -backend-config="subscription_id=${{ vars.AZURE_SUBSCRIPTION_ID }}"
-      - name: Terraform validate
-        run: terraform validate
-      - name: Terraform plan
-        run: terraform plan -input=false -out=tfplan
-      - name: Terraform apply (only when explicitly requested)
-        if: ${{ inputs.confirm_apply }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform init -input=false \
+            -backend-config="resource_group_name=${TF_STATE_RESOURCE_GROUP}" \
+            -backend-config="storage_account_name=${TF_STATE_STORAGE_ACCOUNT}" \
+            -backend-config="container_name=${TF_STATE_CONTAINER}" \
+            -backend-config="key=${TF_STATE_KEY}" \
+            -backend-config="use_oidc=true" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="client_id=${ARM_CLIENT_ID}" \
+            -backend-config="tenant_id=${ARM_TENANT_ID}" \
+            -backend-config="subscription_id=${ARM_SUBSCRIPTION_ID}"
+      - name: Download the exact saved plan from private Azure Blob storage
+        id: restore_plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          plan_blob="plans/${GITHUB_RUN_ID}.tfplan"
+          az storage blob download \
+            --account-name "$TF_STATE_STORAGE_ACCOUNT" \
+            --container-name "$TF_STATE_CONTAINER" \
+            --name "$plan_blob" \
+            --file tfplan \
+            --auth-mode login \
+            --only-show-errors \
+            --output none
+      - name: Apply the reviewed saved plan
         run: terraform apply -input=false -auto-approve tfplan
+      - name: Delete saved plan files from private storage
+        if: ${{ always() && steps.restore_plan.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for extension in tfplan txt; do
+            az storage blob delete \
+              --account-name "$TF_STATE_STORAGE_ACCOUNT" \
+              --container-name "$TF_STATE_CONTAINER" \
+              --name "plans/${GITHUB_RUN_ID}.${extension}" \
+              --auth-mode login \
+              --only-show-errors \
+              --output none
+          done
